@@ -1,0 +1,62 @@
+#chat .fa-inline { display: inline-flex; vertical-align: middle; align-items: center; flex-wrap: wrap; gap: 5px; padding: 3px 7px; margin: 3px 4px; border: 1px solid #67bca455; border-radius: 16px; background: #67bca40d; font-size: 12px; line-height: 1.6; user-select: none; }
+#chat .fa-inline button { color: inherit; background: transparent; border: 0; padding: 1px 4px; cursor: pointer; font: inherit; }
+#chat .fa-inline button:hover { color: #68cab6; }
+#chat .fa-inline button:disabled { opacity: .45; cursor: default; }
+#chat .fa-line-state { opacity: .6; font-size: 10px; }
+#chat .fa-line-active { background: #68cab626; border-color: #68cab6; }
+#chat .fa-inline-note { font-size: 11px; opacity: .5; padding-left: 5px; }
+#chat .fa-line-dock { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; clear: both; }
+#fish-dialogue label { display:block; margin:8px 0; }
+#fish-dialogue label.checkbox_label { display:flex; align-items:center; gap:6px; }
+#fish-dialogue input:not([type=checkbox]), #fish-dialogue textarea, #fish-dialogue select {
+    width:100%;
+    box-sizing:border-box;
+    color: var(--SmartThemeBodyColor, inherit);
+    background-color: var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.2));
+}
+#fish-dialogue .fa-row, #fish-dialogue .fa-voice, #fish-dialogue .fa-library-item { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+#fish-dialogue .fa-voice input { flex:1; min-width:100px; width:auto; }
+#fish-dialogue .fa-voice-card { border:1px solid var(--SmartThemeBorderColor, #444); border-radius:6px; padding:8px; margin:8px 0; background:rgba(255,255,255,0.03); }
+#fish-dialogue .fa-voice-header { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:6px; }
+#fish-dialogue .fa-voice-header input { flex:1; min-width:110px; width:auto; }
+#fish-dialogue .fa-forms-container { margin-left:12px; padding-left:8px; border-left:2px solid var(--SmartThemeQuoteColor, #67bca455); }
+#fish-dialogue .fa-form-row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:4px 0; }
+#fish-dialogue .fa-form-row input { flex:1; min-width:90px; width:auto; }
+#fish-dialogue .fa-form-actions { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:6px; }
+#fish-dialogue .fa-voice-picker { position:relative; display:flex; align-items:center; flex:1; min-width:110px; }
+#fish-dialogue .fa-form-row .fa-voice-picker { flex:1; min-width:90px; }
+#fish-dialogue .fa-voice-picker input { flex:1; min-width:0; width:100%; padding-right:24px; }
+#fish-dialogue .fa-voice-picker-arrow { position:absolute; right:8px; top:50%; transform:translateY(-50%); pointer-events:none; opacity:.55; font-size:11px; }
+#fish-dialogue .fa-voice-lib-menu { position:absolute; top:calc(100% + 2px); left:0; right:0; z-index:200; max-height:280px; overflow:auto; padding:4px; border:1px solid var(--SmartThemeBorderColor,#666); border-radius:6px; background:var(--SmartThemeBlurTintColor,#222); box-shadow:0 6px 18px rgba(0,0,0,.35); }
+#fish-dialogue .fa-voice-lib-group { padding:5px 8px 2px; font-size:11px; opacity:.65; }
+#fish-dialogue .fa-voice-lib-option { display:flex; align-items:center; padding:5px 8px; border-radius:4px; cursor:pointer; overflow-wrap:anywhere; }
+#fish-dialogue .fa-voice-lib-option:hover, #fish-dialogue .fa-voice-lib-option:focus { background:rgba(104,202,182,.16); outline:none; }
+#fish-dialogue .fa-voice-lib-empty { padding:6px 8px; opacity:.6; }
+#fish-dialogue .fa-lib-row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; min-width:0; margin:6px 0; padding:6px 8px; border:1px solid var(--SmartThemeBorderColor,#444); border-radius:6px; background:rgba(255,255,255,0.02); }
+#fish-dialogue .fa-lib-category { flex:1; min-width:90px; width:auto; }
+#fish-dialogue .fa-lib-sub { flex:1; min-width:90px; width:auto; }
+#fish-dialogue .fa-lib-name { flex:1.2; min-width:120px; width:auto; }
+#fish-dialogue .fa-lib-id { flex:2; min-width:170px; width:auto; }
+#fish-dialogue pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:260px; overflow:auto; }
+#fish-dialogue details { margin:8px 0; } #fish-dialogue summary { cursor:pointer; }
+#fish-dialogue #fa-progress-bar { width:100%; } #fish-dialogue #fa-progress-list, #fish-dialogue #fa-library-list { max-height:300px; overflow:auto; }
+#fish-dialogue .fa-job small, #fish-dialogue .fa-library-item small { display:block; } #fish-dialogue .fa-library-item { margin:8px 0; }
+.fa-error-dialog { max-width:min(90vw,520px); color:var(--SmartThemeBodyColor,inherit); background:var(--SmartThemeBlurTintColor,#333); border:1px solid; border-radius:8px; }
+.fa-error-dialog p { white-space:pre-wrap; overflow-wrap:anywhere; }
+
+/* The host owns drawer colors and its delegated open/close behavior. */
+#fish-dialogue { width:100%; min-width:0; box-sizing:border-box; }
+#fish-dialogue > .inline-drawer { width:100%; min-width:0; }
+#fish-dialogue .inline-drawer-header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+#fish-dialogue .inline-drawer-content { display:none; min-width:0; }
+#fish-dialogue button, #chat .fa-inline button, .fa-error-dialog button {
+ writing-mode:horizontal-tb !important; text-orientation:mixed !important;
+ width:auto !important; min-width:max-content; max-width:none;
+ flex:0 0 auto; white-space:nowrap !important; word-break:normal !important;
+ overflow-wrap:normal !important; height:auto; line-height:1.5;
+}
+#fish-dialogue .fa-row, #fish-dialogue .fa-voice, #fish-dialogue .fa-library-item { min-width:0; }
+#fish-dialogue .inline-drawer-content { overflow-x:auto; }
+
+#fish-dialogue .fa-default-heading { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
+#fish-dialogue .fa-default-heading label { margin:8px 0; }

@@ -1,0 +1,11 @@
+{
+  "display_name": "Fish 对话音声",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "Local",
+  "version": "1.6.0",
+  "homePage": "https://docs.fish.audio/"
+}
