@@ -3,7 +3,7 @@ export const DEFAULTS = Object.freeze({
     defaultVoice: '', voices: {}, voicePresets: {}, currentVoicePreset: '',
     voiceLibrary: [], voicePreviewMode: 'greeting',
     voicePreviewTexts: { zh: '你好，很高兴认识你。', ja: 'こんにちは、よろしくお願いします。', en: 'Hello, nice to meet you.', onomatopoeia: '啊…嗯…哈哈哈…' },
-    auto: false, fallback: false, blockEnabled: false, blockedNames: '', directFetch: true
+    auto: false, autoVoice: false, fallback: false, blockEnabled: false, blockedNames: '', directFetch: true
 });
 export const ENGINES = ['s2.1-pro-free', 's2.1-pro', 's2-pro', 's1', 'drama-3-preview'];
 
@@ -101,7 +101,7 @@ function voiceField(row, language) {
     return typeof value === 'string' ? value.trim() : '';
 }
 
-function findVoiceKey(raw, voices) {
+export function findVoiceKey(raw, voices) {
     const canonical = normalizeSpeakerName(raw);
     if (!canonical) return undefined;
     return Object.keys(voices).find(key => normalizeSpeakerName(key) === canonical);
@@ -155,6 +155,74 @@ export function resolveVoice(segment, settings) {
 
 export function voiceFor(segment, settings) {
     return resolveVoice(segment, settings).voice;
+}
+
+const AUTO_VOICE_LABELS = Object.freeze({ zh: '中文', ja: '日语', en: '英语' });
+const AUTO_CJK_RUN = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u3040-\u30FF\u31F0-\u31FF\uAC00-\uD7AF\uFF66-\uFF9F]+/g;
+const AUTO_WORD_RUN = /[A-Za-z0-9_]{2,}/g;
+const AUTO_STOPWORDS = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'you', 'your', 'her', 'his', 'she', 'he', 'not', 'are', 'was', 'has', 'had', 'but', 'who', 'what', 'when', 'where', 'from', 'into', 'over', 'very']);
+
+export function autoTextTokens(text) {
+    const tokens = new Set();
+    const value = String(text || '').normalize('NFKC').toLocaleLowerCase();
+    for (const m of value.matchAll(AUTO_CJK_RUN)) {
+        const run = m[0];
+        if (run.length < 2) { tokens.add(run); continue; }
+        for (let i = 0; i <= run.length - 2; i++) tokens.add(run.slice(i, i + 2));
+    }
+    for (const m of value.matchAll(AUTO_WORD_RUN)) {
+        const word = m[0];
+        if (!AUTO_STOPWORDS.has(word)) tokens.add(word);
+    }
+    return tokens;
+}
+
+export function autoMatchScore(profile, entry, language = 'zh') {
+    const roleText = `${profile?.text || ''} ${profile?.name || ''}`;
+    const roleTokens = autoTextTokens(roleText);
+    const entryText = [entry?.name, entry?.sub, entry?.desc, AUTO_VOICE_LABELS[entry?.category] || ''].filter(Boolean).join(' ');
+    const entryTokens = autoTextTokens(entryText);
+    let score = 0;
+    for (const token of roleTokens) {
+        if (!entryTokens.has(token)) continue;
+        score += /^[A-Za-z0-9_]{4,}$/.test(token) ? 3 : 2;
+    }
+    const roleName = normalizeSpeakerName(profile?.name || '');
+    const entryName = normalizeSpeakerName(entry?.name || '');
+    if (roleName && entryName) {
+        if (roleName === entryName) score += 10;
+        else if (entryName.length >= 2 && (roleName.includes(entryName) || entryName.includes(roleName))) score += 5;
+    }
+    const form = String(profile?.form || '').trim();
+    if (form.length >= 2) {
+        for (const token of autoTextTokens(form)) {
+            if (entryTokens.has(token) || entryText.includes(form)) { score += 3; break; }
+        }
+    }
+    const desc = String(entry?.desc || '').trim();
+    const sub = String(entry?.sub || '').trim();
+    const name = String(entry?.name || '').trim();
+    if (desc.length >= 2 && roleText.includes(desc)) score += 8;
+    if (sub.length >= 2 && roleText.includes(sub)) score += 6;
+    if (name.length >= 2 && roleText.includes(name)) score += 4;
+    if (desc) {
+        for (const m of desc.matchAll(AUTO_CJK_RUN)) {
+            const run = m[0];
+            if (run.length >= 2 && roleText.includes(run)) score += Math.min(4, run.length);
+        }
+    }
+    if (entry?.category === language || AUTO_VOICE_LABELS[entry?.category] === language) score += 2;
+    return score;
+}
+
+export function pickAutoVoice(profile, library, language = 'zh', minScore = 6) {
+    let best = null;
+    for (const entry of library || []) {
+        if (!String(entry?.id || '').trim()) continue;
+        const score = autoMatchScore(profile, entry, language);
+        if (!best || score > best.score) best = { entry, score };
+    }
+    return best && best.score >= minScore ? best : null;
 }
 
 export function dialogueRecords(text, settings) {

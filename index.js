@@ -1,5 +1,5 @@
 import { BrowserAudioStore, synthesizeBrowser } from './browser-audio.mjs';
-import { DEFAULTS, extract, resolveVoice, normalizeSpeakerName, selectLanguage, upgradeWorldbook, blocks, dialogueRecords, segmentFromBlock, isBlocked, buildCharacterFormWorldbookEntry } from './core.mjs';
+import { DEFAULTS, extract, resolveVoice, normalizeSpeakerName, parseSpeakerAndForm, findVoiceKey, pickAutoVoice, selectLanguage, upgradeWorldbook, blocks, dialogueRecords, segmentFromBlock, isBlocked, buildCharacterFormWorldbookEntry } from './core.mjs';
 import { SpeechQueue } from './player.mjs';
 import { SynthesisQueue } from './synthesis.mjs';
 import { installInline } from './inline.mjs';
@@ -30,9 +30,12 @@ let worldModule;
 let inline, libraryEntries = [];
 const voicePickers = new Set();
 let librarySyncTimer = 0;
+const autoVoiceMissed = new Set();
+let autoVoiceEmptyLogged = false;
+let autoBindTimer = 0;
 const root = document.createElement('section'); root.id = 'fish-dialogue';
 root.innerHTML = `
-<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header" role="button" tabindex="0"><b>Fish 对话音声</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><small>版本 1.6.0</small>
+<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header" role="button" tabindex="0"><b>Fish 对话音声</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><small>版本 1.7.0</small>
 <div class="fa-status" id="fa-status">就绪</div>
 <label class="checkbox_label"><input id="fa-auto" type="checkbox"> 新回复自动配音</label><small>按顺序生成对白并保存到本地，不自动播放。</small>
 <div class="fa-row"><button id="fa-latest">聊天序号音频生成</button></div>
@@ -54,6 +57,7 @@ root.innerHTML = `
 </details>
 <details open><summary>角色音色</summary>
 <div class="fa-default-heading"><label for="fa-default">默认音色 ID</label><button id="fa-preview-default" type="button">试听默认音色</button></div><input id="fa-default" class="text_pole">
+<label class="checkbox_label"><input id="fa-auto-voice" type="checkbox"> 自动为未绑定角色匹配音色</label><small>开启后，聊天中出现且尚未绑定音色的角色会自动从音色库按角色描述补配；已有绑定不会被覆盖。</small>
 <label class="checkbox_label"><input id="fa-block-enabled" type="checkbox"> 启用角色屏蔽</label>
 <label>屏蔽角色名字（每行一个）<textarea id="fa-block-names" class="text_pole" rows="2" placeholder="例如：屏蔽角色名字"></textarea></label>
 <small>屏蔽只影响语音，中文对白照常显示。修改后立即停止当前队列。</small>
@@ -68,7 +72,7 @@ root.innerHTML = `
 <label>英语试听文字<input id="fa-preview-text-en" class="text_pole"></label>
 <label>拟声词试听文字<input id="fa-preview-text-ono" class="text_pole"></label>
 </details>
-<small>音色库按中文 / 日语 / 英语三大主类管理；下拉选项只显示名称，鼠标悬停可查看完整 ID。</small>
+<small>音色库按中文 / 日语 / 英语三大主类管理；下拉选项只显示名称，鼠标悬停可查看完整 ID。“描述 / 标签”用于自动匹配角色音色。</small>
 <div id="fa-library-rows"></div>
 <button id="fa-library-add">添加音色</button>
 <label>批量粘贴音色（主类标题行可选，可写“日语/低沉”作为小类）<textarea id="fa-library-batch" class="text_pole" rows="5" placeholder="日语&#10;70b6d85050654441b5280bc0808bab11 自用低沉&#10;&#10;中文&#10;1a4942a3672d4420b23e3c9c97015e3d 姐姐"></textarea></label>
@@ -258,8 +262,136 @@ function warnUnboundVoice(speaker) {
     voiceWarned.set(key, true);
     log('WARN', `角色【${name}】未匹配到专属音色，将使用默认音色`);
 }
+function hasBoundVoice(speaker) {
+    const name = String(speaker || '').trim();
+    if (!name) return true;
+    const matched = resolveVoice({ speaker: name, language: settings.language, text: '' }, settings).matched;
+    return matched === 'exact' || matched === 'base' || matched === 'form';
+}
+function buildVoiceProfile(speaker) {
+    const { baseSpeaker, form } = parseSpeakerAndForm(speaker);
+    const name = baseSpeaker || String(speaker || '').trim();
+    const characters = ctx().characters || [];
+    const character = characters.find(x => x && normalizeSpeakerName(x.name) === normalizeSpeakerName(name));
+    const parts = [];
+    if (character) {
+        for (const key of ['description', 'personality', 'scenario', 'creator_notes', 'system_prompt', 'post_history_instructions']) {
+            const value = character[key];
+            if (typeof value === 'string' && value.trim()) parts.push(value.trim());
+        }
+    }
+    if (form) parts.push(form);
+    return { name, form, text: parts.join(' ') };
+}
+function rowSetVoice(voices, key, voiceId) {
+    const current = voices[key];
+    if (typeof current === 'string') {
+        if (current.trim()) return false;
+        voices[key] = voiceId;
+        return true;
+    }
+    const row = current && typeof current === 'object' ? { ...current, default: current.default || '' } : { default: '' };
+    if (String(row.default || '').trim()) return false;
+    row.default = voiceId;
+    voices[key] = row;
+    return true;
+}
+function fillAutoVoiceBinding(speaker, voiceId) {
+    const voices = settings.voices || (settings.voices = {});
+    const raw = String(speaker || '').trim();
+    const { baseSpeaker, form } = parseSpeakerAndForm(raw);
+    const key = baseSpeaker || raw;
+    const exactKey = form ? findVoiceKey(raw, voices) : undefined;
+    if (exactKey !== undefined) return rowSetVoice(voices, exactKey, voiceId);
+    const baseKey = findVoiceKey(key, voices);
+    if (baseKey !== undefined) return rowSetVoice(voices, baseKey, voiceId);
+    voices[key] = voiceId;
+    return true;
+}
+function applyAutoBindToUi(speaker, voiceId) {
+    const { baseSpeaker } = parseSpeakerAndForm(speaker);
+    const candidates = [...new Set([String(speaker || '').trim(), baseSpeaker])].filter(Boolean);
+    for (const candidate of candidates) {
+        const target = normalizeSpeakerName(candidate);
+        for (const card of $('voices').children) {
+            const first = card.querySelector('.fa-voice-header input');
+            if (!first || normalizeSpeakerName(first.value.trim()) !== target) continue;
+            const inputs = card.querySelectorAll('.fa-voice-header input');
+            if (inputs[1]) inputs[1].value = voiceId;
+            return;
+        }
+    }
+    addVoice(baseSpeaker || String(speaker || '').trim(), voiceId);
+}
+function tryAutoBindVoice(speaker) {
+    if (!settings.autoVoice) return false;
+    const raw = String(speaker || '').trim();
+    if (!raw) return false;
+    const canonical = normalizeSpeakerName(raw);
+    if (autoVoiceMissed.has(canonical)) return false;
+    if (hasBoundVoice(raw)) return false;
+    const library = (settings.voiceLibrary || []).filter(e => String(e?.id || '').trim());
+    if (!library.length) {
+        if (!autoVoiceEmptyLogged) {
+            autoVoiceEmptyLogged = true;
+            log('WARN', '自动音色已开启，但音色库为空，暂不补配。');
+        }
+        return false;
+    }
+    const language = settings.language === 'orig' ? 'zh' : settings.language;
+    const profile = buildVoiceProfile(raw);
+    const best = pickAutoVoice(profile, library, language, 6);
+    if (!best) {
+        autoVoiceMissed.add(canonical);
+        log('WARN', `自动音色：角色【${raw}】未在音色库找到足够匹配，暂不绑定`);
+        return false;
+    }
+    if (!fillAutoVoiceBinding(raw, best.entry.id)) return false;
+    applyAutoBindToUi(raw, best.entry.id);
+    autoVoiceMissed.delete(canonical);
+    voiceWarned.delete(canonical);
+    log('INFO', `自动音色：已为角色【${raw}】绑定【${formatLibraryLabel(best.entry)}】`);
+    return true;
+}
+function autoBindSegments(segments) {
+    let changed = false;
+    for (const segment of segments || []) {
+        if (segment?.speaker && tryAutoBindVoice(segment.speaker)) changed = true;
+    }
+    if (changed) syncVoices({ stop: false });
+}
+function chatSpeakers() {
+    const names = new Set();
+    for (const message of ctx().chat || []) {
+        if (!message || message.is_system) continue;
+        const records = dialogueRecords(message.mes || '', { ...settings, speaker: message.name || ctx().name2 });
+        for (const record of records) {
+            if (message.is_user && record.protocol === 'plain') continue;
+            if (record.speaker) names.add(String(record.speaker).trim());
+        }
+    }
+    return [...names].filter(Boolean);
+}
+function runAutoBind() {
+    if (!settings.autoVoice) return;
+    if (!(settings.voiceLibrary || []).some(e => String(e?.id || '').trim())) {
+        if (!autoVoiceEmptyLogged) {
+            autoVoiceEmptyLogged = true;
+            log('WARN', '自动音色已开启，但音色库为空，暂不补配。');
+        }
+        return;
+    }
+    autoBindSegments(chatSpeakers().map(speaker => ({ speaker })));
+}
+function scheduleAutoBind(delay = 150) {
+    if (!settings.autoVoice) return;
+    clearTimeout(autoBindTimer);
+    autoBindTimer = setTimeout(() => { autoBindTimer = 0; runAutoBind(); }, delay);
+}
 function enqueue(segments, replace = false, eager = false) {
-    const items = segments.filter(s => !isBlocked(s.speaker, settings)).map(s => {
+    const allowed = segments.filter(s => !isBlocked(s.speaker, settings));
+    autoBindSegments(allowed);
+    const items = allowed.map(s => {
         const resolved = resolveVoice(s, settings);
         if (resolved.matched === 'default' || resolved.matched === 'none') warnUnboundVoice(s.speaker);
         return { ...s, voice: resolved.voice, model: settings.model, baseUrl: settings.baseUrl, directFetch: settings.directFetch };
@@ -278,11 +410,16 @@ function bind(id, name, checkbox = false) {
         settings[name] = value; save();
         if (['baseUrl', 'directFetch', 'model', 'defaultVoice'].includes(name)) { stopAll(); if (name === 'defaultVoice') voiceWarned.clear(); }
         if (name === 'auto' && !value) stopAll();
+        if (name === 'autoVoice') {
+            if (value) { autoVoiceMissed.clear(); autoVoiceEmptyLogged = false; scheduleAutoBind(100); }
+            else clearTimeout(autoBindTimer);
+        }
         if (name === 'blockEnabled' || name === 'blockedNames' || name === 'fallback') { stopAll(); inline?.schedule(); }
     });
 }
 bind('auto', 'auto', true); bind('fallback', 'fallback', true);
 bind('block-enabled', 'blockEnabled', true); bind('block-names', 'blockedNames');
+bind('auto-voice', 'autoVoice', true);
 if (typeof settings.model !== 'string' || !settings.model.trim()) { settings.model=DEFAULTS.model; save(); }
 bind('direct-fetch', 'directFetch', true); bind('base', 'baseUrl'); bind('model', 'model'); bind('book', 'book'); bind('default', 'defaultVoice');
 const VOICE_CATEGORY_KEYS = Object.freeze(['zh', 'ja', 'en']);
@@ -294,7 +431,8 @@ function normalizeLibraryEntry(entry) {
     const name = String(entry.name || '').trim();
     const category = VOICE_CATEGORY_KEYS.includes(entry.category) ? entry.category : 'zh';
     const sub = String(entry.sub || '').trim();
-    return id && name ? { id, name, category, sub } : null;
+    const desc = String(entry.desc || '').trim();
+    return id && name ? { id, name, category, sub, desc } : null;
 }
 function sortVoiceLibrary(list) {
     return [...list].sort((a, b) => (VOICE_CATEGORY_KEYS.indexOf(a.category) - VOICE_CATEGORY_KEYS.indexOf(b.category))
@@ -317,7 +455,7 @@ function attachVoicePicker(input) {
         const query = input.value.trim().toLocaleLowerCase();
         const grouped = new Map(VOICE_CATEGORY_KEYS.map(key => [key, []]));
         for (const entry of sortVoiceLibrary(settings.voiceLibrary || [])) {
-            if (query && !(entry.id.toLocaleLowerCase().includes(query) || entry.name.toLocaleLowerCase().includes(query) || entry.sub.toLocaleLowerCase().includes(query))) continue;
+            if (query && !(entry.id.toLocaleLowerCase().includes(query) || entry.name.toLocaleLowerCase().includes(query) || entry.sub.toLocaleLowerCase().includes(query) || (entry.desc || '').toLocaleLowerCase().includes(query))) continue;
             grouped.get(entry.category).push(entry);
         }
         let any = false;
@@ -328,7 +466,7 @@ function attachVoicePicker(input) {
             const group = document.createElement('div'); group.className = 'fa-voice-lib-group'; group.textContent = VOICE_CATEGORY_LABELS[key];
             menu.append(group);
             for (const entry of entries) {
-                const option = document.createElement('div'); option.className = 'fa-voice-lib-option'; option.tabIndex = 0; option.title = entry.id;
+                const option = document.createElement('div'); option.className = 'fa-voice-lib-option'; option.tabIndex = 0; option.title = entry.desc ? `${entry.id}（${entry.desc}）` : entry.id;
                 const label = document.createElement('span'); label.textContent = formatLibraryLabel(entry);
                 option.append(label);
                 option.addEventListener('mousedown', e => e.preventDefault());
@@ -389,7 +527,8 @@ function readLibraryRow(row) {
     const name = row.querySelector('.fa-lib-name')?.value.trim() || '';
     const category = row.querySelector('.fa-lib-category')?.value || 'zh';
     const sub = row.querySelector('.fa-lib-sub')?.value.trim() || '';
-    return id && name ? { id, name, category, sub } : null;
+    const desc = row.querySelector('.fa-lib-desc')?.value.trim() || '';
+    return id && name ? { id, name, category, sub, desc } : null;
 }
 function addLibraryRow(entry = {}) {
     const row = document.createElement('div'); row.className = 'fa-lib-row';
@@ -401,11 +540,12 @@ function addLibraryRow(entry = {}) {
     categorySelect.value = VOICE_CATEGORY_KEYS.includes(entry.category) ? entry.category : 'zh';
     const subInput = document.createElement('input'); subInput.className = 'text_pole fa-lib-sub'; subInput.placeholder = '小类（如：低沉）'; subInput.value = entry.sub || '';
     const nameInput = document.createElement('input'); nameInput.className = 'text_pole fa-lib-name'; nameInput.placeholder = '名称（如：自用低沉）'; nameInput.value = entry.name || '';
+    const descInput = document.createElement('input'); descInput.className = 'text_pole fa-lib-desc'; descInput.placeholder = '描述 / 标签（如：清冷御姐）'; descInput.value = entry.desc || '';
     const idInput = document.createElement('input'); idInput.className = 'text_pole fa-lib-id'; idInput.placeholder = '音色 ID'; idInput.value = entry.id || '';
     const previewBtn = document.createElement('button'); previewBtn.className = 'menu_button'; previewBtn.textContent = '试听';
     const defaultBtn = document.createElement('button'); defaultBtn.className = 'menu_button'; defaultBtn.textContent = '设为默认';
     const deleteBtn = document.createElement('button'); deleteBtn.className = 'menu_button'; deleteBtn.textContent = '×'; deleteBtn.title = '删除此音色';
-    for (const el of [categorySelect, subInput, nameInput, idInput]) {
+    for (const el of [categorySelect, subInput, nameInput, descInput, idInput]) {
         el.addEventListener('input', scheduleLibrarySync);
         el.addEventListener('change', scheduleLibrarySync);
     }
@@ -432,7 +572,7 @@ function addLibraryRow(entry = {}) {
         log('INFO', `已把音色库【${formatLibraryLabel(itemEntry)}】设为默认音色`);
     };
     deleteBtn.onclick = () => { row.remove(); syncLibrary(); };
-    row.append(categorySelect, subInput, nameInput, idInput, previewBtn, defaultBtn, deleteBtn);
+    row.append(categorySelect, subInput, nameInput, descInput, idInput, previewBtn, defaultBtn, deleteBtn);
     $('library-rows').append(row);
     return row;
 }
@@ -445,6 +585,7 @@ function syncLibrary() {
     settings.voiceLibrary = sortVoiceLibrary(list);
     save();
     refreshVoicePickers();
+    autoVoiceMissed.clear(); autoVoiceEmptyLogged = false; scheduleAutoBind(200);
 }
 function scheduleLibrarySync() {
     clearTimeout(librarySyncTimer);
@@ -808,8 +949,9 @@ $('preset-import-file').addEventListener('change', async () => {
 });
 function generateMessage(message) {
     const id=ctx().chat.indexOf(message);
-    const items=parsed(message.mes,message.name || ctx().name2,message.extra?.fish_dialogue?.language || settings.language)
-        .map(s=>{
+    const segments=parsed(message.mes,message.name || ctx().name2,message.extra?.fish_dialogue?.language || settings.language);
+    autoBindSegments(segments);
+    const items=segments.map(s=>{
             const resolved=resolveVoice(s,settings);
             if (resolved.matched === 'default' || resolved.matched === 'none') warnUnboundVoice(s.speaker);
             return {...s,messageRef:message,uiKey:id+':'+s.block,voice:resolved.voice,model:settings.model,baseUrl:settings.baseUrl,directFetch:settings.directFetch};
@@ -922,6 +1064,7 @@ c.eventSource.on(c.eventTypes.CHARACTER_MESSAGE_RENDERED, async (id, type) => {
         try { await ctx().saveChat(); } catch { log('WARN', '消息语言元数据保存失败'); }
     }
     inline.schedule();
+    scheduleAutoBind(120);
     if (!settings.auto || type === 'first_message' || type === 'quiet') return;
     const fingerprint = JSON.stringify([message.swipe_id, message.mes, settings.language]);
     if (seen.get(id) === fingerprint) return;
@@ -929,9 +1072,9 @@ c.eventSource.on(c.eventTypes.CHARACTER_MESSAGE_RENDERED, async (id, type) => {
     try { generateMessage(message); } catch (e) { log('ERROR', e.message); }
 });
 for (const event of ['CHAT_CHANGED', 'MESSAGE_SWIPED', 'MESSAGE_DELETED', 'MESSAGE_EDITED', 'MESSAGE_UPDATED']) {
-    if (c.eventTypes[event]) c.eventSource.on(c.eventTypes[event], () => { stopAll(); seen.clear(); inline.schedule(); });
+    if (c.eventTypes[event]) c.eventSource.on(c.eventTypes[event], () => { stopAll(); seen.clear(); inline.schedule(); scheduleAutoBind(200); });
 }
-for (const event of ['MORE_MESSAGES_LOADED', 'CHAT_LOADED', 'APP_READY']) if (c.eventTypes[event]) c.eventSource.on(c.eventTypes[event], inline.schedule);
+for (const event of ['MORE_MESSAGES_LOADED', 'CHAT_LOADED', 'APP_READY']) if (c.eventTypes[event]) c.eventSource.on(c.eventTypes[event], () => { inline.schedule(); scheduleAutoBind(200); });
 $('audio').addEventListener('pause', () => inline.schedule());
 window.addEventListener('pagehide', () => { stopAll(); clearInterval(progressTimer); inline.disconnect(); apiKey = ''; });
-log('INFO', '1.6.0 已加载；请点“升级世界书”和“添加正则”，启用 Talk-Emo 协议。');
+log('INFO', '1.7.0 已加载；请点“升级世界书”和“添加正则”，启用 Talk-Emo 协议。');

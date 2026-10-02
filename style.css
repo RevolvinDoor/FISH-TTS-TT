@@ -35,6 +35,7 @@
 #fish-dialogue .fa-lib-row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; min-width:0; margin:6px 0; padding:6px 8px; border:1px solid var(--SmartThemeBorderColor,#444); border-radius:6px; background:rgba(255,255,255,0.02); }
 #fish-dialogue .fa-lib-category { flex:1; min-width:90px; width:auto; }
 #fish-dialogue .fa-lib-sub { flex:1; min-width:90px; width:auto; }
+#fish-dialogue .fa-lib-desc { flex:1.4; min-width:140px; width:auto; }
 #fish-dialogue .fa-lib-name { flex:1.2; min-width:120px; width:auto; }
 #fish-dialogue .fa-lib-id { flex:2; min-width:170px; width:auto; }
 #fish-dialogue pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:260px; overflow:auto; }
